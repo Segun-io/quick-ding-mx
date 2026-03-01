@@ -1,0 +1,125 @@
+services:
+  # ── Infrastructure (always runs) ──────────────────────────────────
+  mariadb:
+    image: mariadb:11
+    restart: unless-stopped
+    ports:
+      - "3306:3306"
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-rootpassword}
+    volumes:
+      - mariadb_data:/var/lib/mysql
+      - ./init-db.sql:/docker-entrypoint-initdb.d/init-db.sql
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - cosmoherraje
+
+  minio:
+    image: minio/minio
+    restart: unless-stopped
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minioadmin}
+    volumes:
+      - minio_data:/data
+    command: server /data --console-address ":9001"
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - cosmoherraje
+
+  minio-init:
+    image: minio/mc
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: >
+      /bin/sh -c "
+      mc alias set local http://minio:9000 $${MINIO_ROOT_USER:-minioadmin} $${MINIO_ROOT_PASSWORD:-minioadmin};
+      mc mb --ignore-existing local/salamanca;
+      mc mb --ignore-existing local/invoiceninja;
+      exit 0;
+      "
+    networks:
+      - cosmoherraje
+
+  invoiceninja:
+    image: invoiceninja/invoiceninja:5
+    restart: unless-stopped
+    ports:
+      - "8080:80"
+    depends_on:
+      mariadb:
+        condition: service_healthy
+    environment:
+      APP_URL: ${INVOICENINJA_APP_URL:-http://localhost:8080}
+      APP_KEY: ${INVOICENINJA_APP_KEY}
+      DB_HOST: mariadb
+      DB_PORT: 3306
+      DB_DATABASE: invoiceninja
+      DB_USERNAME: root
+      DB_PASSWORD: ${MYSQL_ROOT_PASSWORD:-rootpassword}
+      IN_USER_EMAIL: ${IN_USER_EMAIL:-admin@example.com}
+      IN_PASSWORD: ${IN_PASSWORD:-changeme}
+    volumes:
+      - invoiceninja_public:/var/www/app/public
+      - invoiceninja_storage:/var/www/app/storage
+    networks:
+      - cosmoherraje
+
+  # ── Containerized salamanca (production-like only) ───────────────
+  salamanca:
+    build:
+      context: ../salamanca-proxy
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    ports:
+      - "${SALAMANCA_HOST_PORT:-3002}:3000"
+    depends_on:
+      mariadb:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: mysql://salamanca:${SALAMANCA_DB_PASSWORD:-salamancapassword}@mariadb:3306/salamanca
+      INVOICENINJA_URL: http://invoiceninja
+      INVOICENINJA_API_TOKEN: ${INVOICENINJA_API_TOKEN}
+      WEBHOOK_SECRET: ${WEBHOOK_SECRET}
+      MINIO_ENDPOINT: http://minio:9000
+      MINIO_ACCESS_KEY: ${MINIO_ROOT_USER:-minioadmin}
+      MINIO_SECRET_KEY: ${MINIO_ROOT_PASSWORD:-minioadmin}
+      MINIO_BUCKET: salamanca
+      FACTURAMA_ENV: ${FACTURAMA_ENV:-sandbox}
+      FACTURAMA_USER: ${FACTURAMA_USER}
+      FACTURAMA_PASSWORD: ${FACTURAMA_PASSWORD}
+      ISSUER_RFC: ${ISSUER_RFC}
+      ISSUER_NAME: ${ISSUER_NAME}
+      ISSUER_FISCAL_REGIME: ${ISSUER_FISCAL_REGIME}
+      ISSUER_EXPEDITION_PLACE: ${ISSUER_EXPEDITION_PLACE}
+      BETTER_AUTH_SECRET: ${BETTER_AUTH_SECRET}
+      BETTER_AUTH_URL: http://salamanca:3000
+      CORS_ORIGIN: ${CORS_ORIGIN:-http://localhost:3001}
+      NODE_ENV: production
+    profiles: ["full"]
+    networks:
+      - cosmoherraje
+
+volumes:
+  mariadb_data:
+  minio_data:
+  invoiceninja_public:
+  invoiceninja_storage:
+
+networks:
+  cosmoherraje:
+    driver: bridge

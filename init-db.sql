@@ -1,0 +1,5 @@
+CREATE DATABASE IF NOT EXISTS invoiceninja;
+CREATE DATABASE IF NOT EXISTS salamanca;
+CREATE USER IF NOT EXISTS 'salamanca'@'%' IDENTIFIED BY 'salamancapassword';
+GRANT ALL PRIVILEGES ON salamanca.* TO 'salamanca'@'%';
+FLUSH PRIVILEGES;
